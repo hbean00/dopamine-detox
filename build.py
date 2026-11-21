@@ -26,6 +26,7 @@ args = [
     "--collect-all", "uiautomation",
     "--hidden-import", "comtypes.stream",
     "--hidden-import", "pystray._win32",
+    "--hidden-import", "win32com.client",
 ]
 if not test:
     args.append("--uac-admin")

@@ -7,6 +7,8 @@ import webview
 
 from engine import winutil
 from engine.autostart import set_autostart
+from engine import levels
+from engine.appguard import running_apps
 from engine.core import Engine
 
 
@@ -25,9 +27,17 @@ class Api:
     def get_state(self):
         return self._e.state()
 
-    def start_session(self, minutes):
-        self._e.start_session(minutes)
+    def start_session(self, minutes, level=None):
+        r = self._e.start_session(minutes, level)
+        if r and not r.get("ok", True):
+            return r
         return self._e.state()
+
+    def get_levels(self):
+        return levels.level_list()
+
+    def list_running_apps(self):
+        return running_apps()
 
     def extend_session(self, minutes):
         self._e.extend_session(minutes)
@@ -46,10 +56,10 @@ class Api:
     def get_schedules(self):
         return self._e.store.schedules()
 
-    def add_schedule(self, days, start, end):
+    def add_schedule(self, days, start, end, level=1):
         if not days:
             return self._e.store.schedules()
-        self._e.store.add_schedule(days, start, end)
+        self._e.store.add_schedule(days, start, end, level)
         return self._e.store.schedules()
 
     def remove_schedule(self, sid):
@@ -65,12 +75,29 @@ class Api:
 
     def save_settings(self, settings):
         old = self._e.store.settings
+        # v2 배타성: 1·2단계 차단 대상은 3단계 허용 사이트에 넣을 수 없다
+        if "allowed_sites" in settings:
+            sites, err = levels.validate_allowed_sites(settings.get("allowed_sites") or [],
+                                                       settings.get("extra_domains") or old.get("extra_domains"))
+            if err:
+                return {"ok": False, "error": err}
+            settings = dict(settings, allowed_sites=sites)
+        if "allowed_apps" in settings:
+            settings = dict(settings, allowed_apps=levels.normalize_apps(settings.get("allowed_apps") or []))
+        for k in ("last_level", "focustodo_level"):
+            if k in settings:
+                settings[k] = levels.clamp_level(settings[k], old.get(k, 1))
         if self._e.active and old.get("strict"):
             # 집중 중에는 차단을 약하게 만드는 변경을 막는다
+            more_sites = set(settings.get("allowed_sites", [])) - set(old.get("allowed_sites") or [])
+            more_apps = set(settings.get("allowed_apps", [])) - set(old.get("allowed_apps") or [])
             weaker = (any(old["targets_enabled"].get(k) and not settings.get("targets_enabled", {}).get(k, True)
                           for k in old["targets_enabled"])
                       or (old["strict"] and not settings.get("strict", True))
-                      or (old["tab_guard"] and not settings.get("tab_guard", True)))
+                      or (old["tab_guard"] and not settings.get("tab_guard", True))
+                      or (self._e.level in (3, 4) and (more_sites or more_apps))
+                      or (self._e.source == "focustodo"
+                          and settings.get("focustodo_level", 1) < old.get("focustodo_level", 1)))
             if weaker:
                 return {"ok": False, "error": "엄격 모드: 집중 중에는 차단을 끄는 설정을 바꿀 수 없어요."}
         if bool(settings.get("autostart")) != bool(old.get("autostart")):
@@ -116,12 +143,20 @@ def make_tray(window, engine, quit_cb):
 
     menu = pystray.Menu(
         pystray.MenuItem("열기", show, default=True),
-        pystray.MenuItem("30분 집중 시작", lambda i, it: engine.start_session(30)),
+        pystray.MenuItem("30분 집중 시작 (마지막 단계)", lambda i, it: engine.start_session(30)),
         pystray.MenuItem("종료", quit_),
     )
     icon = pystray.Icon("DopamineDetox", img, "도파민 디톡스", menu)
     icon.run_detached()
     return icon
+
+
+def _can_import(mod):
+    try:
+        __import__(mod)
+        return True
+    except Exception:
+        return False
 
 
 def selftest(out_path):
@@ -141,6 +176,8 @@ def selftest(out_path):
         "hosts_block": sorted(hosts.current_domains()),
         "is_admin": winutil.is_admin(),
         "webview_version": getattr(webview, "__version__", "?"),
+        "win32com": _can_import("win32com.client"),
+        "levels": [lv["name"] for lv in levels.level_list()],
     }
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(res, f, ensure_ascii=False, indent=1)

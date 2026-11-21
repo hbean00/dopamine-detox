@@ -13,15 +13,16 @@ VENDORS = [
     r"SOFTWARE\Policies\Microsoft\Edge",
 ]
 LIST = "URLBlocklist"
+ALLOW = "URLAllowlist"   # v2 3단계: URLBlocklist ["*"] + 허용 사이트
 HIVE = winreg.HKEY_LOCAL_MACHINE
 if os.environ.get("DD_POLICY_TEST"):  # 단위 테스트: 관리자 권한 없이 HKCU 아래 테스트 키 사용
     HIVE = winreg.HKEY_CURRENT_USER
     VENDORS = [v.replace(r"SOFTWARE\Policies", r"SOFTWARE\DopamineDetoxTest") for v in VENDORS]
 
 
-def _read_list(path):
+def _read_list(path, name=LIST):
     try:
-        with winreg.OpenKey(HIVE, path + "\\" + LIST) as k:
+        with winreg.OpenKey(HIVE, path + "\\" + name) as k:
             vals, i = [], 1
             while True:
                 try:
@@ -35,8 +36,8 @@ def _read_list(path):
         return []
 
 
-def _write_list(path, items):
-    full = path + "\\" + LIST
+def _write_list(path, items, name=LIST):
+    full = path + "\\" + name
     if not items:
         try:
             winreg.DeleteKey(HIVE, full)
@@ -55,9 +56,9 @@ def _write_list(path, items):
             winreg.SetValueEx(k, str(i), 0, winreg.REG_SZ, v)
 
 
-def current(managed):
+def current(managed, name=LIST):
     """각 브라우저 목록에 들어 있는 우리 항목 (교집합, 브라우저 간 공통)."""
-    sets = [set(_read_list(p)) & managed for p in VENDORS]
+    sets = [set(_read_list(p, name)) & managed for p in VENDORS]
     return set.intersection(*sets) if sets else set()
 
 
@@ -75,15 +76,17 @@ def refresh():
         pass
 
 
-def apply(want, managed):
-    """want: 막을 패턴 집합. managed: 우리가 관리하는 모든 패턴(지울 대상). 실패 시 OSError."""
+def apply(want, managed, want_allow=(), managed_allow=()):
+    """want: 막을 패턴 집합. managed: 우리가 관리하는 모든 패턴(지울 대상).
+    want_allow / managed_allow: URLAllowlist 쪽 (3단계). 실패 시 OSError."""
     changed = False
     for p in VENDORS:
-        existing = [v for v in _read_list(p) if v not in managed]
-        new = existing + sorted(want)
-        if new != _read_list(p):
-            _write_list(p, new)
-            changed = True
+        for name, w, m in ((LIST, want, managed), (ALLOW, want_allow, managed_allow)):
+            existing = [v for v in _read_list(p, name) if v not in m]
+            new = existing + sorted(w)
+            if new != _read_list(p, name):
+                _write_list(p, new, name)
+                changed = True
         # 브라우저가 시작할 때 감시할 수 있도록 vendor 키는 비어 있어도 남겨 둔다
         try:
             winreg.CreateKeyEx(HIVE, p, 0, winreg.KEY_WRITE).Close()

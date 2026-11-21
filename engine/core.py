@@ -6,7 +6,8 @@ import time
 
 import psutil
 
-from . import browserpolicy, hosts, winutil
+from . import browserctl, browserpolicy, hosts, levels, winutil
+from .appguard import AppGuard
 from .aiguard import SKIP_EXES, AIGuard
 from .focustodo import FocusToDoWatcher
 from .store import Store, today_key
@@ -97,6 +98,11 @@ class Engine:
         self._stop = threading.Event()
         self.admin = winutil.is_admin()
         self.last_fg = None   # 이 앱이 아닌 마지막 맨 앞 창 (title, exe) — AI 판정용
+        self.level = None     # v2: 지금 적용 중인 집중 단계 (1~4)
+        self.plan = levels.plan(None, self.store.settings)
+        self._restart_level = None   # 웨일을 마지막으로 재시작했을 때 적용한 3·4단계
+        self._last_app_enforce = 0
+        self.appguard = AppGuard(on_close=self._on_app_closed)
         self.ai = AIGuard(self, log, self.notify)
 
     # ------------------------------------------------------------ lifecycle
@@ -104,8 +110,11 @@ class Engine:
         self.ftd.start()
         self.ai.start()
         # 지난번 비정상 종료로 남은 블록 정리 → 첫 tick이 올바른 상태로 다시 씀
+        left_strict = "*" in (self.store.data.get("policy_applied") or [])
         self._sync_hosts(set(), force=True)
-        self._sync_policy(set(), force=True)
+        self._sync_policy(set(), set(), force=True)
+        if left_strict:  # 지난번에 3·4단계 정책이 남은 채 꺼졌다 → 실행 중인 웨일이 계속 막혀 있으니 재시작
+            self._restart_whale_async("지난 실행에서 남은 3·4단계 차단 정리")
         threading.Thread(target=self._loop, name="engine", daemon=True).start()
 
     def shutdown(self):
@@ -114,7 +123,7 @@ class Engine:
         self.ai.stop()
         try:
             self._sync_hosts(set(), force=True)
-            self._sync_policy(set(), force=True)
+            self._sync_policy(set(), set(), force=True)
         finally:
             self.store.save(force=True)
 
@@ -128,12 +137,14 @@ class Engine:
 
     # ------------------------------------------------------------ decision
     def _decide(self, now):
+        """(source, started, ends, level) — 겹치면 가장 엄격한 단계가 이긴다."""
         d = self.store.data
         s = self.store.settings
+        cands = []
         sess = d.get("session")
         if sess and now < sess["ends_at"]:
-            return "manual", sess["started_at"], sess["ends_at"]
-        if sess and now >= sess["ends_at"]:
+            cands.append(("manual", sess["started_at"], sess["ends_at"], levels.clamp_level(sess.get("level"), 1)))
+        elif sess and now >= sess["ends_at"]:
             d["session"] = None
             self.store.touch()
             self.notify("집중 시간 끝", "수고했어요. 차단을 풀었습니다.")
@@ -143,15 +154,19 @@ class Engine:
                 continue
             w = schedule_window(sch, now)
             if w and now >= sup.get("schedule_until", 0):
-                return "schedule", w[0], w[1]
+                cands.append(("schedule", w[0], w[1], levels.clamp_level(sch.get("level"), 1)))
+                break
         if s["focustodo_enabled"]:
             st = self.ftd.status
             on = st == "focus" or (st == "break" and s["block_during_break"])
             if not on:
                 sup["focustodo"] = False
             elif not sup.get("focustodo"):
-                return "focustodo", None, None
-        return None, None, None
+                cands.append(("focustodo", None, None, levels.clamp_level(s.get("focustodo_level"), 1)))
+        if not cands:
+            return None, None, None, None
+        order = {"manual": 0, "schedule": 1, "focustodo": 2}
+        return max(cands, key=lambda c: (c[3], -order[c[0]]))
 
     def tick(self):
         now = time.time()
@@ -168,46 +183,68 @@ class Engine:
                     self.store.touch()
                     if self.active:
                         self.notify(f"{TARGETS[k]['label']} 다시 차단", "허용 시간이 끝났어요.")
-            source, started, ends = self._decide(now)
-            was = self.active
+            source, started, ends, level = self._decide(now)
+            was, was_level = self.active, self.level
             self.active = source is not None
-            if self.active != was:
-                log(f"차단 {'시작' if self.active else '해제'} (source={source}, focustodo={self.ftd.status})")
+            self.level = level if self.active else None
+            if self.active != was or self.level != was_level:
+                self._last_app_enforce = 0  # 단계가 바뀌면 허용 앱 검사를 바로 다시
+                name = levels.LEVELS[self.level]["name"] if self.level else "-"
+                what = "시작" if (self.active and not was) else ("해제" if not self.active else "단계 변경")
+                log(f"차단 {what} (source={source}, level={self.level} {name}, focustodo={self.ftd.status})")
             if self.active and not was:
                 self.started_at = started or now
-                self.notify("집중 시작", "딴짓 사이트를 막았습니다.")
+                self.notify("집중 시작", levels.LEVELS[self.level]["name"] + " — 딴짓을 막았습니다.")
             if not self.active:
                 self.started_at = None
+                self.appguard.reset()
             elif started:
                 self.started_at = started
             self.source, self.ends_at = source, ends
             if self.active:
                 self.store.add_focus(elapsed)
 
-            blocked = self._blocked_targets(now)
+            p = levels.plan(self.level, s)
+            # 1단계 '잠깐 열기' 중인 대상은 이번만 빼 준다
+            if p["temp_allow"]:
+                for k in list(allows):
+                    if allows[k]["until"] > now:
+                        p["block"] -= domains_for(k, s["extra_domains"].get(k))
+                        p["title_res"] = [(kk, rr) for kk, rr in p["title_res"] if kk != k]
+                        p["kill"] -= set(TARGETS[k]["processes"])
+            self.plan = p
+
             want = set()
-            if s.get("hosts_block", False):
-                for k in blocked:
-                    if TARGETS[k]["domains"]:
-                        want |= domains_for(k, s["extra_domains"].get(k))
+            if s.get("hosts_block", False) and "*" not in p["block"]:
+                want = set(p["block"])
             self._sync_hosts(want)
-            pol = set()
             if s.get("browser_policy", True):
-                for k in blocked:
-                    pol |= policy_patterns_for(k, s["extra_domains"].get(k))
-            self._sync_policy(pol)
-            if "kakaotalk" in blocked:
-                self._kill_processes(TARGETS["kakaotalk"]["processes"], now)
+                self._sync_policy(_minimize(p["block"]), set(p["allow"]))
+            else:
+                self._sync_policy(set(), set())
+            # 실행 중인 웨일은 정책 변경을 바로 반영하지 않는다(실측) → 3·4단계에 들어갈 때·바꿀 때·나올 때 재시작
+            target = self.level if p["needs_restart"] else None
+            if target != self._restart_level:
+                why = (levels.LEVELS[self.level]["name"] + " 정책 적용") if target else "3·4단계 차단 해제"
+                self._restart_whale_async(why)
+                self._restart_level = target
+            if p["kill"]:
+                self._kill_processes(p["kill"], now)
+            if p["allowlist_apps"] is not None and now - self._last_app_enforce >= 2:
+                self._last_app_enforce = now
+                self.appguard.enforce(p["allowlist_apps"], now)
             fg_hwnd, fg_exe, fg_title = winutil.foreground()
             if fg_title and fg_exe not in SKIP_EXES:
                 self.last_fg = (fg_title, fg_exe)
-            if self.active and s["tab_guard"]:
-                self._tab_guard(blocked, now)
+            if self.active and s["tab_guard"] and p["title_res"]:
+                self._tab_guard(p["title_res"], now)
             self.store.save()
 
     def _blocked_targets(self, now):
         if not self.active:
             return set()
+        if self.level and self.level >= 2:
+            return set(TARGET_KEYS)  # 2단계 이상은 예외 없이 전부
         s = self.store.settings
         allows = self.store.data.get("allows", {})
         return {k for k in TARGET_KEYS
@@ -242,27 +279,35 @@ class Engine:
 
     def _policy_managed(self):
         s = self.store.settings
-        return all_policy_patterns(s["extra_domains"]) | set(self.store.data.get("policy_applied") or [])
+        block = (all_policy_patterns(s["extra_domains"]) | levels.preset_domains() | {"*"}
+                 | set(self.store.data.get("policy_applied") or []))
+        allow = (set(levels.CLAUDE_SITES) | {levels.normalize_domain(x) or "" for x in s.get("allowed_sites") or []}
+                 | set(self.store.data.get("policy_allow_applied") or [])) - {""}
+        return block, allow
 
-    def _sync_policy(self, want, force=False):
-        """브라우저 URLBlocklist 정책 — hosts를 되돌리는 보안 프로그램이 있어도 동작하는 두 번째 차단."""
+    def _sync_policy(self, want, want_allow=frozenset(), force=False):
+        """브라우저 정책: URLBlocklist(+3단계 URLAllowlist). 원래 있던 항목은 건드리지 않는다."""
         now = time.time()
-        if not force and want == self._policy_applied:
+        key = (frozenset(want), frozenset(want_allow))
+        mb, ma = self._policy_managed()
+        if not force and key == self._policy_applied:
             if now - self._policy_verify < 5:
                 return
             self._policy_verify = now
             try:
-                if browserpolicy.current(self._policy_managed()) == want:
+                if (browserpolicy.current(mb) == set(want)
+                        and browserpolicy.current(ma, browserpolicy.ALLOW) == set(want_allow)):
                     return
             except OSError:
                 return
             log("브라우저 정책이 외부에서 바뀜 → 다시 씀")
         try:
-            browserpolicy.apply(want, self._policy_managed() | want)
-            if want != self._policy_applied:
-                log(f"브라우저 정책 갱신: 패턴 {len(want)}개")
-            self._policy_applied = set(want)
+            browserpolicy.apply(want, mb | set(want), want_allow, ma | set(want_allow))
+            if key != self._policy_applied:
+                log(f"브라우저 정책 갱신: 차단 {len(want)}개" + (f", 허용 {len(want_allow)}개" if want_allow else ""))
+            self._policy_applied = key
             self.store.data["policy_applied"] = sorted(want)
+            self.store.data["policy_allow_applied"] = sorted(want_allow)
             self.store.touch()
             self.policy_error = None
         except OSError as e:
@@ -270,6 +315,23 @@ class Engine:
             if msg != self.policy_error:
                 log(msg)
             self.policy_error = msg
+
+    def _restart_whale_async(self, why):
+        def run():
+            try:
+                if not browserctl.is_running():
+                    return
+                r = browserctl.restart_whale()
+                log(f"웨일 재시작({why}): {r}")
+                self.notify("웨일을 다시 열었어요", why + " — 탭은 복원됩니다.")
+            except Exception as e:
+                log(f"웨일 재시작 실패: {e}")
+        threading.Thread(target=run, name="whale-restart", daemon=True).start()
+
+    def _on_app_closed(self, exe, title):
+        self.store.add_hit()
+        log(f"허용 앱 밖이라 닫음: {exe} — {title[:60]}")
+        self.notify("허용 앱만 쓸 수 있어요", exe + " 창을 닫았어요.")
 
     def _kill_processes(self, names, now):
         if now - self._last_kill < 2:
@@ -286,23 +348,25 @@ class Engine:
         if killed:
             log(f"프로세스 종료: {names} x{killed}")
             self.store.add_hit()
-            self.notify("카카오톡 차단 중", "공부 목적이면 앱에서 '잠깐 열기'를 누르세요.")
+            msg = ("공부 목적이면 앱에서 '잠깐 열기'를 누르세요." if self.plan.get("temp_allow")
+                   else "이 단계에서는 쓸 수 없어요.")
+            self.notify("메신저 차단 중", msg)
 
-    def _tab_guard(self, blocked, now):
+    def _tab_guard(self, title_res, now):
         hwnd, exe, title = winutil.foreground()
         if not hwnd or exe not in BROWSERS or not title:
             return
         clean = BROWSER_SUFFIX.sub("", title).strip()
-        for k in blocked:
-            pat = TARGETS[k]["title"]
-            if pat and pat.search(clean):
+        for k, pat in title_res:
+            if pat.search(clean):
                 if now - self._last_close.get(hwnd, 0) < 1.5:
                     return
                 self._last_close[hwnd] = now
                 winutil.send_ctrl_w()
-                log(f"맨 앞 탭 닫음({TARGETS[k]['label']}): {clean}")
+                label = TARGETS[k]["label"] if k in TARGETS else levels.PRESETS[k]["label"]
+                log(f"맨 앞 탭 닫음({label}): {clean}")
                 self.store.add_hit()
-                self.notify(f"{TARGETS[k]['label']} 차단", "집중 시간이라 탭을 닫았어요.")
+                self.notify(f"{label} 차단", "집중 시간이라 탭을 닫았어요.")
                 return
 
     # ------------------------------------------------------------ state for UI
@@ -319,7 +383,7 @@ class Engine:
                     "label": TARGETS[k]["label"],
                     "enabled": s["targets_enabled"].get(k, True),
                     "blocked": k in blocked,
-                    "allowable": TARGETS[k]["allowable"],
+                    "allowable": TARGETS[k]["allowable"] and self.level in (None, 1),
                     "allow_until": a["until"] if a else None,
                     "allow_reason": a["reason"] if a else None,
                 }
@@ -345,23 +409,35 @@ class Engine:
                        "warnings_today": len(day.get("ai_warnings", []))},
                 "allows_left": (max(0, int(s.get("allow_daily_limit", 3)) - len(day["allows"]))
                                 if int(s.get("allow_daily_limit", 3) or 0) else None),
+                "level": self.level,
+                "level_name": levels.LEVELS[self.level]["name"] if self.level else None,
+                "levels": levels.level_list(),
+                "rules_now": levels.rules_now(self.level, s),
+                "whale_running": browserctl.is_running(),
                 "is_admin": self.admin and not (self.hosts_error or self.policy_error),
                 "error": self.hosts_error or self.policy_error,
             }
 
     # ------------------------------------------------------------ commands
-    def start_session(self, minutes):
+    def start_session(self, minutes, level=None):
         now = time.time()
         minutes = max(1, min(600, int(minutes)))
+        s = self.store.settings
+        level = levels.clamp_level(level if level is not None else s.get("last_level", 1), 1)
         with self.lock:
             sess = self.store.data.get("session")
+            if self.active and self.level and level < self.level and s["strict"]:
+                return {"ok": False, "error": f"엄격 모드: 집중 중에는 더 약한 단계로 바꿀 수 없어요 (지금 {self.level}단계)."}
             if sess and sess["ends_at"] > now:
                 sess["ends_at"] = max(sess["ends_at"], now + minutes * 60)
+                sess["level"] = level
             else:
-                self.store.data["session"] = {"started_at": now, "ends_at": now + minutes * 60}
+                self.store.data["session"] = {"started_at": now, "ends_at": now + minutes * 60, "level": level}
+            s["last_level"] = level
             self.store.touch()
             self.store.save(force=True)
         self.tick()
+        return {"ok": True}
 
     def extend_session(self, minutes):
         now = time.time()
@@ -397,6 +473,8 @@ class Engine:
     def allow_temporarily(self, target, minutes, reason):
         if target not in TARGETS or not TARGETS[target]["allowable"]:
             return {"ok": False, "error": "이 항목은 잠깐 열기를 지원하지 않아요."}
+        if self.active and self.level and self.level != 1:
+            return {"ok": False, "error": levels.LEVELS[self.level]["name"] + " 단계에는 잠깐 열기가 없어요."}
         reason = (reason or "").strip()
         if len(reason) < 2:
             return {"ok": False, "error": "어떤 공부에 쓰는지 적어주세요."}
@@ -431,3 +509,11 @@ class Engine:
             out.append({"date": key, "focus_minutes": int(h.get("focus_seconds", 0) // 60),
                         "blocked_hits": h.get("blocked_hits", 0)})
         return out
+
+
+def _minimize(domains):
+    """정책용: 상위 도메인이 있으면 하위 도메인은 뺀다 ('instagram.com'이 www.까지 막음). '*'는 그대로."""
+    doms = set(domains)
+    if "*" in doms:
+        return {"*"}
+    return {d for d in doms if not any(d != p and d.endswith("." + p) for p in doms)}

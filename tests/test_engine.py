@@ -3,6 +3,8 @@ tmp = tempfile.mkdtemp()
 os.environ["DD_HOSTS_PATH"] = os.path.join(tmp, "hosts")
 os.environ["DD_DATA_DIR"] = os.path.join(tmp, "data")
 os.environ["DD_POLICY_TEST"] = "1"
+os.environ["DD_NO_BROWSER_RESTART"] = "1"
+os.environ["DD_NO_APPGUARD"] = "1"
 ORIG = "# Copyright (c) Microsoft\r\n# 한글 주석\r\n127.0.0.1 localhost\r\n10.0.0.5 my.server\r\n"
 open(os.environ["DD_HOSTS_PATH"], "w", encoding="utf-8", newline="").write(ORIG)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

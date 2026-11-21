@@ -10,6 +10,13 @@
   const SOURCE_LABEL = { manual: '직접 시작', schedule: '반복 일정', focustodo: 'Focus To-Do 연동' };
   const OBJ = { instagram: 'Instagram을', youtube: 'YouTube를', kakaotalk: '카카오톡을', webtoon: '웹툰을' };
   const FTD_STATUS = { focus: '집중 중', break: '휴식 중', paused: '일시정지', idle: '대기', not_running: '실행 안 됨' };
+  // 백엔드가 levels를 주기 전까지만 쓰는 대체값
+  const LEVELS_FALLBACK = [
+    { id: 1, name: '가벼운 집중', short: '딴짓 사이트만 차단', rules: [] },
+    { id: 2, name: '깊은 집중', short: 'SNS·뉴스·쇼핑까지 차단', rules: [] },
+    { id: 3, name: 'Claude만', short: 'Claude와 허용 사이트만', rules: [] },
+    { id: 4, name: '오프라인', short: '모든 웹·Claude 차단', rules: [] },
+  ];
 
   let api = null;
   let isMock = false;
@@ -20,6 +27,9 @@
   let allowMin = 15;
   let settingsCache = null;
   let settingsDirty = false;
+  let levels = LEVELS_FALLBACK;
+  let levelsSig = '';
+  let selectedLevel = null;   // null이면 설정을 받을 때 last_level로 정한다
 
   /* ---------- API 연결 ---------- */
   function connect() {
@@ -76,6 +86,7 @@
     const h = Math.floor(min / 60), m = min % 60;
     return m ? `${h}시간 ${m}분` : `${h}시간`;
   }
+  const lines = (v) => String(v || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
   function setText(el, t) { if (el && el.textContent !== t) el.textContent = t; }
   function setHtml(el, h) { if (el && el.dataset.h !== h) { el.dataset.h = h; el.innerHTML = h; } }
   // "29분", "1시간 5분"처럼 글자가 섞인 타이머는 숫자만 크게, 단위는 작게
@@ -98,6 +109,55 @@
     if (view === 'schedule') loadSchedules();
     if (view === 'history') loadHistory();
     if (view === 'settings' && !settingsDirty) loadSettings();
+  }
+
+  /* ---------- 집중 단계 ---------- */
+  function levelById(id) { return levels.find((l) => l.id === id) || null; }
+  function levelName(id) { const l = levelById(id); return l ? l.name : `${id}단계`; }
+
+  // levels가 바뀌었을 때만 단계 버튼·선택 상자를 다시 그린다
+  function setLevels(list) {
+    if (!Array.isArray(list) || !list.length) return;
+    const sig = JSON.stringify(list);
+    if (sig === levelsSig) return;
+    levelsSig = sig; levels = list;
+    $('#levelPicker').innerHTML = levels.map((l) => `
+      <button type="button" class="level" role="radio" data-level="${l.id}" aria-checked="false">
+        <span class="level-num">${l.id}</span><span class="level-name">${esc(l.name)}</span><span class="level-short">${esc(l.short || '')}</span>
+      </button>`).join('');
+    const opts = levels.map((l) => `<option value="${l.id}">${l.id}단계 · ${esc(l.name)}</option>`).join('');
+    $$('select.level-select').forEach((sel) => {
+      const v = sel.value; sel.innerHTML = opts;
+      if (v && levelById(+v)) sel.value = v;
+    });
+    const f = $('#settingsForm');
+    if (settingsCache && settingsCache.focustodo_level && !settingsDirty) f.focustodo_level.value = String(settingsCache.focustodo_level);
+    renderLevelPicker();
+  }
+
+  function renderLevelPicker() {
+    const sel = selectedLevel || 1;
+    $$('#levelPicker .level').forEach((b) => {
+      const id = +b.dataset.level;
+      b.setAttribute('aria-checked', String(id === sel));
+      b.tabIndex = id === sel ? 0 : -1;
+      b.classList.toggle('is-included', id < sel);
+    });
+    const l = levelById(sel);
+    const rules = (l && l.rules && l.rules.length) ? l.rules : (l ? [l.short] : []);
+    setHtml($('#levelRules'), rules.map((r) => `<li>${esc(r)}</li>`).join(''));
+    updateStartLabel();
+  }
+
+  function pickLevel(id, persist) {
+    if (!levelById(id)) return;
+    selectedLevel = id;
+    renderLevelPicker();
+    if (persist && settingsCache && settingsCache.last_level !== id) {
+      settingsCache.last_level = id;
+      // 조용히 저장 — 실패할 때만 call()이 알림을 띄운다
+      call('save_settings', Object.assign({}, settingsCache, { last_level: id }));
+    }
   }
 
   /* ---------- 홈 ---------- */
@@ -141,7 +201,9 @@
     document.body.classList.toggle('is-locked', !!st.active);
     $('#adminBanner').hidden = st.is_admin !== false;
 
-    setText($('#statusText'), st.active ? '집중 중' : '대기 중');
+    if (st.levels) setLevels(st.levels);
+    const lvName = st.active && st.level ? (st.level_name || levelName(st.level)) : '';
+    setText($('#statusText'), st.active ? (lvName ? `집중 중 · ${lvName}` : '집중 중') : '대기 중');
     setText($('#sourceText'), st.active && st.source ? SOURCE_LABEL[st.source] || '' : '');
 
     const cd = $('#countdown'), sub = $('#countdownSub');
@@ -178,12 +240,27 @@
     const ns = st.next_schedule;
     setText($('#nextText'), ns ? `${ns.label} · ${relative(ns.starts_at - st.now)}` : '없음');
 
+    // 지금 적용 중인 규칙: 3·4단계는 허용 목록 방식이라 사이트별 카드 대신 규칙이 그 자리를 채운다
+    const rn = $('#rulesNow');
+    const rules = st.active ? (st.rules_now || []) : [];
+    const listMode = !!st.active && st.level >= 3;
+    rn.hidden = !rules.length;
+    rn.classList.toggle('is-row', listMode);
+    setHtml(rn, rules.map((r) => `<li>${esc(r)}</li>`).join(''));
+    $('#targets').hidden = listMode;
+
     const tg = st.targets || {};
     TARGET_KEYS.forEach((k) => renderTarget(k, tg[k], st));
   }
 
   function updateStartLabel() {
-    setText($('#btnStart'), `${minutesText(selectedMin)} 집중 시작`);
+    const l = selectedLevel ? levelById(selectedLevel) : null;
+    setText($('#btnStart'), l ? `${minutesText(selectedMin)} · ${l.name} 시작` : `${minutesText(selectedMin)} 집중 시작`);
+  }
+
+  async function startSession() {
+    const st = await call('start_session', selectedMin, selectedLevel || 1);
+    if (st && st.now) { S = st; renderHome(st); }
   }
 
   async function poll() {
@@ -236,6 +313,7 @@
       <li class="sched-item${s.enabled ? '' : ' is-off'}" data-id="${esc(s.id)}">
         <span class="sched-days" aria-label="요일">${[...DAYS].map((d, i) => `<span class="${s.days.includes(i) ? 'on' : ''}">${d}</span>`).join('')}</span>
         <span class="sched-time">${esc(s.start)} – ${esc(s.end)}</span>
+        <span class="sched-level">${s.level ? `<b>${esc(s.level)}</b>${esc(levelName(s.level))}` : ''}</span>
         <input type="checkbox" class="switch" data-toggle ${s.enabled ? 'checked' : ''} aria-label="일정 켜기">
         <button class="btn btn-quiet btn-sm" data-remove>삭제</button>
       </li>`).join('');
@@ -308,6 +386,9 @@
     f.allow_daily_limit.value = String(s.allow_daily_limit == null ? 3 : s.allow_daily_limit);
     f.ai_interval_min.value = String(s.ai_interval_min || 5);
     f.work_description.value = s.work_description || '';
+    if (s.focustodo_level) f.focustodo_level.value = String(s.focustodo_level);
+    f.allowed_sites.value = (s.allowed_sites || []).join('\n');
+    f.allowed_apps.value = (s.allowed_apps || []).join('\n');
     syncStrictPhrase();
     settingsDirty = false;
     setText($('#saveState'), '');
@@ -315,7 +396,6 @@
 
   function collectSettings() {
     const f = $('#settingsForm');
-    const lines = (v) => v.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
     const base = settingsCache ? JSON.parse(JSON.stringify(settingsCache)) : {};
     base.targets_enabled = Object.fromEntries(TARGET_KEYS.map((k) => [k, f[`t_${k}`].checked]));
     base.extra_domains = Object.assign({}, base.extra_domains, {
@@ -328,6 +408,9 @@
     if (isNaN(base.allow_daily_limit)) base.allow_daily_limit = 3;
     base.ai_interval_min = parseInt(f.ai_interval_min.value, 10) || 5;
     base.work_description = f.work_description.value.trim();
+    base.focustodo_level = parseInt(f.focustodo_level.value, 10) || base.focustodo_level || 2;
+    base.allowed_sites = lines(f.allowed_sites.value).map((d) => d.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase());
+    base.allowed_apps = lines(f.allowed_apps.value).map((x) => x.toLowerCase());
     return base;
   }
 
@@ -363,9 +446,30 @@
     });
     custom.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btnStart').click(); });
 
-    $('#btnStart').addEventListener('click', async () => {
-      const st = await call('start_session', selectedMin);
-      if (st && st.now) { S = st; renderHome(st); }
+    $('#btnStart').addEventListener('click', () => {
+      // 3·4단계는 실행 중인 웨일에 정책이 바로 안 먹어서 다시 시작해야 한다
+      if ((selectedLevel || 1) >= 3 && S && S.whale_running) { $('#whaleDialog').showModal(); return; }
+      startSession();
+    });
+    $('#whaleForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      $('#whaleDialog').close();
+      startSession();
+    });
+
+    // 단계
+    $('#levelPicker').addEventListener('click', (e) => {
+      const b = e.target.closest('.level'); if (b) pickLevel(+b.dataset.level, true);
+    });
+    $('#levelPicker').addEventListener('keydown', (e) => {
+      const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+      if (!d) return;
+      e.preventDefault();
+      const ids = levels.map((l) => l.id);
+      const i = ids.indexOf(selectedLevel || 1);
+      const next = ids[Math.min(ids.length - 1, Math.max(0, i + d))];
+      pickLevel(next, true);
+      const nb = $(`#levelPicker .level[data-level="${next}"]`); if (nb) nb.focus();
     });
     $('#btnExtend').addEventListener('click', async () => {
       const st = await call('extend_session', 15);
@@ -430,7 +534,7 @@
       const start = $('#schedStart').value, end = $('#schedEnd').value;
       if (!days.length) { toast('요일을 하나 이상 고르세요.', true); return; }
       if (!start || !end || start >= end) { toast('끝 시각은 시작 시각보다 늦어야 합니다.', true); return; }
-      const list = await call('add_schedule', days, start, end);
+      const list = await call('add_schedule', days, start, end, parseInt($('#schedLevel').value, 10) || 1);
       if (Array.isArray(list)) { renderSchedules(list); toast('일정을 추가했습니다.'); }
     });
     $('#schedList').addEventListener('click', async (e) => {
@@ -465,6 +569,32 @@
         toast('설정을 저장했습니다.');
         poll();
       }
+    });
+    $('#btnRunningApps').addEventListener('click', async () => {
+      const btn = $('#btnRunningApps');
+      btn.disabled = true;
+      const list = await call('list_running_apps');
+      btn.disabled = false;
+      if (!Array.isArray(list)) return;
+      const wrap = $('#runningApps');
+      if (!list.length) { wrap.innerHTML = '<span class="set-note">지금 열린 창이 없습니다.</span>'; return; }
+      const have = new Set(lines($('#settingsForm').allowed_apps.value).map((x) => x.toLowerCase()));
+      wrap.innerHTML = list.map((a) => {
+        const exe = String(a.exe || '').toLowerCase();
+        return `<button type="button" class="chip" data-exe="${esc(exe)}" aria-pressed="${have.has(exe)}" title="${esc(a.title || '')}">
+          <span class="chip-exe">${esc(exe)}</span>${a.title ? `<span class="chip-title">${esc(a.title)}</span>` : ''}</button>`;
+      }).join('');
+    });
+    $('#runningApps').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-exe]'); if (!b) return;
+      const ta = $('#settingsForm').allowed_apps;
+      const exe = b.dataset.exe;
+      const cur = lines(ta.value);
+      if (!cur.map((x) => x.toLowerCase()).includes(exe)) {
+        ta.value = cur.concat(exe).join('\n');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      b.setAttribute('aria-pressed', 'true');
     });
     $('#btnDiagnose').addEventListener('click', async () => {
       const out = $('#diagOut');
@@ -510,7 +640,14 @@
     bind();
     await connect();
     $('#apiMode').hidden = !isMock;
-    call('get_settings').then((s) => { if (s) settingsCache = s; });
+    setLevels(LEVELS_FALLBACK);
+    if (typeof api.get_levels === 'function') call('get_levels').then((l) => setLevels(l));
+    call('get_settings').then((s) => {
+      if (!s) return;
+      settingsCache = s;
+      if (selectedLevel == null) pickLevel(levelById(s.last_level) ? s.last_level : 1, false);
+      if (s.focustodo_level && !settingsDirty) $('#settingsForm').focustodo_level.value = String(s.focustodo_level);
+    });
     await poll();
     setInterval(poll, 1000);
   }

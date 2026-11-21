@@ -50,6 +50,8 @@
         </div>
 
         <div class="hero-idle">
+          <div class="levels" id="levelPicker" role="radiogroup" aria-label="집중 단계"></div>
+          <ul class="level-rules" id="levelRules" aria-label="이 단계에서 막는 것"></ul>
           <div class="presets" role="radiogroup" aria-label="집중 시간">
             <button class="preset" data-min="30" role="radio"><span class="preset-num">30</span><span class="preset-unit">분</span></button>
             <button class="preset is-selected" data-min="60" role="radio"><span class="preset-num">60</span><span class="preset-unit">분</span></button>
@@ -67,6 +69,7 @@
         </div>
       </div>
 
+      <ul class="rules-now" id="rulesNow" aria-label="지금 적용 중인 규칙" hidden></ul>
       <div class="targets" id="targets"></div>
     </section>
 
@@ -84,6 +87,7 @@
           <input id="schedStart" type="time" value="09:00" aria-label="시작 시각" required>
           <span class="time-sep">–</span>
           <input id="schedEnd" type="time" value="12:00" aria-label="끝 시각" required>
+          <select id="schedLevel" class="input level-select" aria-label="집중 단계"></select>
           <button type="submit" class="btn btn-primary">일정 추가</button>
         </div>
       </form>
@@ -109,11 +113,37 @@
       <h1 class="view-title">설정</h1>
       <form id="settingsForm" class="settings" autocomplete="off">
         <fieldset class="set-section">
+          <legend class="set-title">집중 단계</legend>
+          <div class="set-panel">
+            <label class="set-row">
+              <span class="set-text"><b>Focus To-Do 포모도로 시작 시</b><small>포모도로가 시작되면 이 단계로 막습니다.</small></span>
+              <select name="focustodo_level" class="input level-select"></select>
+            </label>
+            <div class="set-row set-row-col">
+              <span class="set-text"><b>허용 사이트 <span class="tag tag-level">3단계</span></b><small>Claude만 단계에서 Claude 말고 열어 둘 사이트입니다. 한 줄에 하나씩.</small></span>
+              <div class="chips chips-fixed" aria-label="항상 열리는 사이트">
+                <span class="chip is-fixed">claude.ai</span><span class="chip is-fixed">claude.com</span><span class="chip is-fixed">anthropic.com</span>
+              </div>
+              <textarea name="allowed_sites" class="list-input" rows="3" spellcheck="false" placeholder="예: lms.school.ac.kr" aria-label="허용 사이트"></textarea>
+            </div>
+            <div class="set-row set-row-col">
+              <span class="set-text"><b>허용 앱 <span class="tag tag-level">3·4단계</span></b><small>이 목록 밖의 창은 닫습니다. 실행 파일 이름을 한 줄에 하나씩.</small></span>
+              <textarea name="allowed_apps" class="list-input" rows="4" spellcheck="false" placeholder="예: code.exe" aria-label="허용 앱"></textarea>
+              <div class="apps-pick">
+                <button type="button" id="btnRunningApps" class="btn btn-sm">열린 앱 불러오기</button>
+                <div class="chips" id="runningApps"></div>
+              </div>
+              <small class="set-note">탐색기·이 앱·Focus To-Do·브라우저는 항상 허용됩니다. 3단계에서는 Claude 앱도 허용됩니다.</small>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset class="set-section">
           <legend class="set-title">차단 대상</legend>
           <div class="set-panel">
             <div id="setTargets"></div>
             <div class="set-row set-row-col set-domains">
-              <span class="set-text"><b>추가로 막을 주소</b><small>한 줄에 하나씩. 예: shorts.example.com</small></span>
+              <span class="set-text"><b>추가로 막을 주소 <span class="tag tag-level">1·2단계</span></b><small>한 줄에 하나씩. 예: shorts.example.com</small></span>
               <div class="domain-grid">
                 <label class="domain-field"><span>Instagram</span><textarea name="dom_instagram" rows="3" spellcheck="false"></textarea></label>
                 <label class="domain-field"><span>YouTube</span><textarea name="dom_youtube" rows="3" spellcheck="false"></textarea></label>
@@ -153,14 +183,14 @@
               <input type="text" name="strict_phrase" class="input input-wide">
             </label>
             <label class="set-row">
-              <span class="set-text"><b>잠깐 열기 기본 시간</b><small>YouTube·카카오톡을 열 때 처음 선택되는 시간입니다.</small></span>
+              <span class="set-text"><b>잠깐 열기 기본 시간 <span class="tag tag-level">1단계</span></b><small>YouTube·카카오톡을 열 때 처음 선택되는 시간입니다.</small></span>
               <select name="allow_default_minutes" class="input">
                 <option value="10">10분</option><option value="15">15분</option>
                 <option value="30">30분</option><option value="60">60분</option>
               </select>
             </label>
             <label class="set-row">
-              <span class="set-text"><b>잠깐 열기 하루 횟수</b><small>YouTube·카카오톡 합쳐서 셉니다.</small></span>
+              <span class="set-text"><b>잠깐 열기 하루 횟수 <span class="tag tag-level">1단계</span></b><small>YouTube·카카오톡 합쳐서 셉니다.</small></span>
               <select name="allow_daily_limit" class="input">
                 <option value="1">1회</option><option value="2">2회</option><option value="3">3회</option>
                 <option value="5">5회</option><option value="0">제한 없음</option>
@@ -202,7 +232,7 @@
           <legend class="set-title">AI 경고</legend>
           <div class="set-panel">
             <label class="set-row">
-              <span class="set-text"><b>업무와 관련 없으면 알려주기</b><small>집중 중 맨 앞 창 제목을 Claude(haiku)에 보내 판정합니다. 화면 내용은 보내지 않습니다.</small></span>
+              <span class="set-text"><b>업무와 관련 없으면 알려주기 <span class="tag tag-level">1·2단계</span></b><small>집중 중 맨 앞 창 제목을 Claude(haiku)에 보내 판정합니다. 화면 내용은 보내지 않습니다.</small></span>
               <input type="checkbox" class="switch" name="ai_warning">
             </label>
             <label class="set-row set-row-sub">
@@ -271,6 +301,18 @@
     <div class="sheet-actions">
       <button type="button" class="btn btn-primary" data-close>계속 집중</button>
       <button type="submit" class="btn btn-quiet btn-danger" id="stopSubmit">그만하기</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 웨일 다시 시작 -->
+<dialog id="whaleDialog" class="sheet">
+  <form method="dialog" id="whaleForm">
+    <h2 class="sheet-title">웨일을 다시 시작합니다</h2>
+    <p class="sheet-note">허용 사이트만 열리도록 웨일을 닫았다가 탭을 복원해 다시 엽니다. 작성 중인 글은 먼저 저장하세요.</p>
+    <div class="sheet-actions">
+      <button type="button" class="btn btn-quiet" data-close>취소</button>
+      <button type="submit" class="btn btn-primary" id="whaleSubmit">다시 시작하고 집중</button>
     </div>
   </form>
 </dialog>

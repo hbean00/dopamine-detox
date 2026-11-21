@@ -95,12 +95,13 @@ class AIGuard:
         while not self._stop.is_set():
             s = self.e.store.settings
             now = time.time()
-            if s.get("ai_warning") and self.e.active and now >= self._next and not self._busy:
+            allowed = self.e.plan.get("ai", True)  # v2: 1·2단계에서만 (3단계는 허용 목록, 4단계는 Claude 불가)
+            if s.get("ai_warning") and self.e.active and allowed and now >= self._next and not self._busy:
                 self._next = now + max(1, int(s.get("ai_interval_min", 5))) * 60
                 res = self._check()
                 if res.get("skipped"):
                     self._next = now + 30  # 맨 앞 창이 없으면(자리 비움 등) 30초 뒤 다시
-            elif not (s.get("ai_warning") and self.e.active):
+            elif not (s.get("ai_warning") and self.e.active and allowed):
                 self._next = 0  # 집중이 시작되면 첫 판정은 바로
             self._stop.wait(5)
 

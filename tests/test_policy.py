@@ -9,6 +9,8 @@ tmp = tempfile.mkdtemp()
 os.environ["DD_HOSTS_PATH"] = os.path.join(tmp, "hosts")
 os.environ["DD_DATA_DIR"] = os.path.join(tmp, "data")
 os.environ["DD_POLICY_TEST"] = "1"
+os.environ["DD_NO_BROWSER_RESTART"] = "1"
+os.environ["DD_NO_APPGUARD"] = "1"
 open(os.environ["DD_HOSTS_PATH"], "w").write("127.0.0.1 localhost\n")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine import browserpolicy as bp  # noqa: E402

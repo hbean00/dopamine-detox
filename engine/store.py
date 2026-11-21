@@ -6,6 +6,7 @@ import threading
 import time
 import uuid
 
+from .levels import DEFAULT_ALLOWED_APPS
 from .targets import TARGET_KEYS
 
 DATA_DIR = os.environ.get("DD_DATA_DIR") or os.path.join(os.environ.get("APPDATA", "."), "DopamineDetox")
@@ -27,6 +28,10 @@ DEFAULT_SETTINGS = {
     "ai_warning": False,         # AI 업무 관련성 경고 (Claude CLI haiku, 기본 끔 — 창 제목이 외부로 전송됨)
     "ai_interval_min": 5,
     "work_description": "",
+    "last_level": 1,             # v2: 홈에서 기본으로 고른 집중 단계
+    "focustodo_level": 1,        # v2: 포모도로가 시작될 때 쓸 단계
+    "allowed_sites": [],         # v2: 3단계 허용 사이트 (Claude는 항상 허용)
+    "allowed_apps": list(DEFAULT_ALLOWED_APPS),  # v2: 3·4단계 허용 앱
 }
 
 DEFAULT = {
@@ -117,11 +122,12 @@ class Store:
     def schedules(self):
         return self.data["schedules"]
 
-    def add_schedule(self, days, start, end):
+    def add_schedule(self, days, start, end, level=1):
         with self.lock:
             days = sorted({int(d) for d in days if 0 <= int(d) <= 6})
             self.data["schedules"].append({
                 "id": uuid.uuid4().hex[:8], "days": days, "start": start, "end": end, "enabled": True,
+                "level": int(level) if str(level).isdigit() and 1 <= int(level) <= 4 else 1,
             })
             self.touch()
             self.save(force=True)
