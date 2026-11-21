@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>도파민 디톡스</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@200;300;500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <nav class="rail" aria-label="화면">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>도파민 디톡스</div>
+    <div class="nav">
+      <button class="nav-item is-current" data-view="home">홈</button>
+      <button class="nav-item" data-view="schedule">일정</button>
+      <button class="nav-item" data-view="history">기록</button>
+      <button class="nav-item" data-view="settings">설정</button>
+    </div>
+    <div class="rail-foot">
+      <button id="btnHide" class="link-btn">트레이로 숨기기</button>
+      <span id="apiMode" class="mode-tag" hidden>미리보기 · 가짜 데이터</span>
+    </div>
+  </nav>
+
+  <main class="main">
+    <div id="adminBanner" class="banner" hidden>
+      관리자 권한이 없어 사이트 차단이 동작하지 않습니다. 앱을 관리자 권한으로 다시 실행하세요.
+    </div>
+
+    <!-- 홈 -->
+    <section class="view is-current" id="view-home">
+      <header class="status-line">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="statusText" class="status-text">대기 중</span>
+        <span id="sourceText" class="status-source"></span>
+      </header>
+
+      <div class="hero">
+        <div class="hero-active">
+          <div id="countdown" class="countdown" aria-live="off">00:00</div>
+          <div class="progress" id="progress" hidden aria-hidden="true"><span class="progress-fill" id="progressFill"></span></div>
+          <p id="countdownSub" class="hero-sub"></p>
+          <div class="hero-actions">
+            <button id="btnExtend" class="btn">15분 연장</button>
+            <button id="btnStop" class="btn btn-quiet">그만하기</button>
+          </div>
+        </div>
+
+        <div class="hero-idle">
+          <div class="presets" role="radiogroup" aria-label="집중 시간">
+            <button class="preset" data-min="30" role="radio"><span class="preset-num">30</span><span class="preset-unit">분</span></button>
+            <button class="preset is-selected" data-min="60" role="radio"><span class="preset-num">60</span><span class="preset-unit">분</span></button>
+            <button class="preset" data-min="90" role="radio"><span class="preset-num">90</span><span class="preset-unit">분</span></button>
+            <label class="preset preset-custom">
+              <input id="customMin" type="number" min="1" max="720" inputmode="numeric" placeholder="직접" aria-label="직접 입력(분)">
+              <span class="preset-unit">분</span>
+            </label>
+          </div>
+          <button id="btnStart" class="btn btn-primary btn-lg">60분 집중 시작</button>
+          <dl class="idle-meta">
+            <div><dt>Focus To-Do</dt><dd id="ftdText">—</dd></div>
+            <div><dt>다음 일정</dt><dd id="nextText">—</dd></div>
+          </dl>
+        </div>
+      </div>
+
+      <div class="targets" id="targets"></div>
+    </section>
+
+    <!-- 일정 -->
+    <section class="view" id="view-schedule">
+      <h1 class="view-title">일정</h1>
+      <p class="view-lead">정해 둔 시간에는 자동으로 차단됩니다.</p>
+
+      <ul class="sched-list" id="schedList"></ul>
+
+      <form id="schedForm" class="sched-form">
+        <h2 class="block-title">새 일정</h2>
+        <div class="day-toggles" id="dayToggles"></div>
+        <div class="time-row">
+          <input id="schedStart" type="time" value="09:00" aria-label="시작 시각" required>
+          <span class="time-sep">–</span>
+          <input id="schedEnd" type="time" value="12:00" aria-label="끝 시각" required>
+          <button type="submit" class="btn btn-primary">일정 추가</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 기록 -->
+    <section class="view" id="view-history">
+      <h1 class="view-title">기록</h1>
+      <div class="today-stats">
+        <div class="stat"><span id="statFocus" class="stat-num">0</span><span class="stat-label">오늘 집중한 시간</span></div>
+        <div class="stat"><span id="statHits" class="stat-num">0</span><span class="stat-label">막힌 시도</span></div>
+      </div>
+
+      <h2 class="block-title">최근 7일</h2>
+      <div class="bars" id="bars"></div>
+
+      <h2 class="block-title">오늘 잠깐 연 기록</h2>
+      <ul class="allow-log" id="allowLog"></ul>
+    </section>
+
+    <!-- 설정 -->
+    <section class="view" id="view-settings">
+      <h1 class="view-title">설정</h1>
+      <form id="settingsForm" class="settings" autocomplete="off">
+        <fieldset class="set-section">
+          <legend class="set-title">차단 대상</legend>
+          <div class="set-panel">
+            <div id="setTargets"></div>
+            <div class="set-row set-row-col set-domains">
+              <span class="set-text"><b>추가로 막을 주소</b><small>한 줄에 하나씩. 예: shorts.example.com</small></span>
+              <div class="domain-grid">
+                <label class="domain-field"><span>Instagram</span><textarea name="dom_instagram" rows="3" spellcheck="false"></textarea></label>
+                <label class="domain-field"><span>YouTube</span><textarea name="dom_youtube" rows="3" spellcheck="false"></textarea></label>
+                <label class="domain-field"><span>웹툰</span><textarea name="dom_webtoon" rows="3" spellcheck="false"></textarea></label>
+              </div>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset class="set-section">
+          <legend class="set-title">차단 방식</legend>
+          <div class="set-panel">
+            <label class="set-row">
+              <span class="set-text"><b>브라우저 정책으로 차단 <span class="tag">기본</span></b><small>웨일·크롬·엣지가 막힌 사이트를 열지 않습니다.</small></span>
+              <input type="checkbox" class="switch" name="browser_policy">
+            </label>
+            <label class="set-row">
+              <span class="set-text"><b>탭 자동 닫기</b><small>막힌 사이트 탭이 보이면 닫습니다.</small></span>
+              <input type="checkbox" class="switch" name="tab_guard">
+            </label>
+            <label class="set-row set-row-caution">
+              <span class="set-text"><b>hosts 파일로도 차단 <span class="tag tag-caution">고급</span></b><small>모든 앱에 적용되지만 AhnLab 같은 보안 프로그램이 복원 경고를 띄웁니다.</small></span>
+              <input type="checkbox" class="switch switch-caution" name="hosts_block">
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="set-section">
+          <legend class="set-title">집중 규칙</legend>
+          <div class="set-panel">
+            <label class="set-row">
+              <span class="set-text"><b>엄격 모드</b><small>그만하려면 해제 문장을 그대로 입력해야 합니다.</small></span>
+              <input type="checkbox" class="switch" name="strict">
+            </label>
+            <label class="set-row set-row-sub">
+              <span class="set-text"><small>해제 문장</small></span>
+              <input type="text" name="strict_phrase" class="input input-wide">
+            </label>
+            <label class="set-row">
+              <span class="set-text"><b>잠깐 열기 기본 시간</b><small>YouTube·카카오톡을 열 때 처음 선택되는 시간입니다.</small></span>
+              <select name="allow_default_minutes" class="input">
+                <option value="10">10분</option><option value="15">15분</option>
+                <option value="30">30분</option><option value="60">60분</option>
+              </select>
+            </label>
+            <label class="set-row">
+              <span class="set-text"><b>잠깐 열기 하루 횟수</b><small>YouTube·카카오톡 합쳐서 셉니다.</small></span>
+              <select name="allow_daily_limit" class="input">
+                <option value="1">1회</option><option value="2">2회</option><option value="3">3회</option>
+                <option value="5">5회</option><option value="0">제한 없음</option>
+              </select>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="set-section">
+          <legend class="set-title">연동</legend>
+          <div class="set-panel">
+            <label class="set-row">
+              <span class="set-text"><b>Focus To-Do 포모도로와 연동</b><small>집중이 시작되면 자동으로 막습니다.</small></span>
+              <input type="checkbox" class="switch" name="focustodo_enabled">
+            </label>
+            <label class="set-row">
+              <span class="set-text"><b>휴식 중에도 차단</b><small>포모도로 사이 휴식 시간에도 계속 막습니다.</small></span>
+              <input type="checkbox" class="switch" name="block_during_break">
+            </label>
+            <div class="set-row set-row-static">
+              <span class="set-text"><b>연동 진단</b><small>포모도로를 켠 상태에서 눌러, 앱이 무엇을 읽는지 확인합니다.</small></span>
+              <button type="button" id="btnDiagnose" class="btn btn-sm">진단하기</button>
+            </div>
+            <pre id="diagOut" class="diag" hidden></pre>
+          </div>
+        </fieldset>
+
+        <fieldset class="set-section">
+          <legend class="set-title">시스템</legend>
+          <div class="set-panel">
+            <label class="set-row">
+              <span class="set-text"><b>로그인 시 자동 실행</b><small>관리자 권한으로 등록되어 매번 확인 창이 뜨지 않습니다.</small></span>
+              <input type="checkbox" class="switch" name="autostart">
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="set-section">
+          <legend class="set-title">AI 경고</legend>
+          <div class="set-panel">
+            <label class="set-row">
+              <span class="set-text"><b>업무와 관련 없으면 알려주기</b><small>집중 중 맨 앞 창 제목을 Claude(haiku)에 보내 판정합니다. 화면 내용은 보내지 않습니다.</small></span>
+              <input type="checkbox" class="switch" name="ai_warning">
+            </label>
+            <label class="set-row set-row-sub">
+              <span class="set-text"><small>지금 하는 업무</small></span>
+              <input type="text" name="work_description" class="input input-wide" placeholder="예: ASIC 설계 LAB3 보고서 작성">
+            </label>
+            <label class="set-row">
+              <span class="set-text"><b>판정 간격</b></span>
+              <select name="ai_interval_min" class="input">
+                <option value="3">3분</option><option value="5">5분</option>
+                <option value="10">10분</option><option value="15">15분</option>
+              </select>
+            </label>
+            <div class="set-row set-row-static">
+              <span class="set-text"><b>지금 시험</b><small>현재 맨 앞 창으로 한 번 판정해 봅니다. 10초쯤 걸립니다.</small></span>
+              <button type="button" id="btnAiTest" class="btn btn-sm">시험하기</button>
+            </div>
+            <pre id="aiOut" class="diag" hidden></pre>
+          </div>
+        </fieldset>
+
+        <div class="save-bar">
+          <span id="saveState" class="save-state"></span>
+          <button type="submit" class="btn btn-primary" id="btnSave">설정 저장</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+
+<!-- 잠깐 열기 -->
+<dialog id="allowDialog" class="sheet">
+  <form method="dialog" id="allowForm">
+    <h2 class="sheet-title" id="allowTitle">YouTube 잠깐 열기</h2>
+    <label class="field">
+      <span>무엇을 하려고 여나요?</span>
+      <textarea id="allowReason" rows="3" placeholder="예: 강의 영상 시청" required></textarea>
+    </label>
+    <div class="field">
+      <span>얼마 동안</span>
+      <div class="seg" id="allowMinutes" role="radiogroup">
+        <button type="button" data-min="10">10분</button>
+        <button type="button" data-min="15">15분</button>
+        <button type="button" data-min="30">30분</button>
+        <button type="button" data-min="60">60분</button>
+      </div>
+    </div>
+    <p class="sheet-note">시간이 끝나면 자동으로 다시 막힙니다.</p>
+    <div class="sheet-actions">
+      <button type="button" class="btn btn-quiet" data-close>취소</button>
+      <button type="submit" class="btn btn-primary" id="allowSubmit">열기</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 그만하기 -->
+<dialog id="stopDialog" class="sheet">
+  <form method="dialog" id="stopForm">
+    <h2 class="sheet-title">집중을 그만할까요?</h2>
+    <div id="stopStrict">
+      <p class="sheet-note">아래 문장을 그대로 입력하면 차단이 풀립니다.</p>
+      <p class="phrase" id="stopPhrase"></p>
+      <input type="text" id="stopInput" class="input input-block" autocomplete="off" spellcheck="false" aria-label="해제 문장 입력">
+    </div>
+    <p class="sheet-note" id="stopPlain">지금 그만하면 차단이 바로 풀립니다.</p>
+    <div class="sheet-actions">
+      <button type="button" class="btn btn-primary" data-close>계속 집중</button>
+      <button type="submit" class="btn btn-quiet btn-danger" id="stopSubmit">그만하기</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="mock.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

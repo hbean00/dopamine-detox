@@ -1,0 +1,11 @@
+# build outputs (exe는 GitHub Releases에 올림)
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+
+# 로컬 도구/로그
+.claude/
+@AutomationLog.txt
+*.log
