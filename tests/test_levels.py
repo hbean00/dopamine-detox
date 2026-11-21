@@ -33,7 +33,8 @@ assert p1["temp_allow"] and not p2["temp_allow"] and not p3["temp_allow"] and no
 assert p1["ai"] and p2["ai"] and not p3["ai"] and not p4["ai"]
 assert p3["block"] == {"*"} and {"claude.ai", "anthropic.com", "lms.example.ac.kr"} <= p3["allow"]
 assert "claude.exe" in p3["allowlist_apps"] and "code.exe" in p3["allowlist_apps"]
-assert p4["block"] == {"*"} and not p4["allow"]                      # 4단계: 허용 사이트 목록 자체가 없음
+assert p4["block"] == {"*"} and p4["allow"] == set(levels.LOCAL_SITES)   # 4단계: 외부 웹 없음, localhost만
+assert {"localhost", "127.0.0.1", "[::1]"} <= p3["allow"]                 # 3단계: Claude로 만든 로컬 개발 서버
 assert "claude.exe" not in p4["allowlist_apps"] and "claude.exe" in p4["kill"]
 assert p3["needs_restart"] and p4["needs_restart"] and not p1["needs_restart"] and not p2["needs_restart"]
 # 1단계에서 끈 대상은 1단계에서만 빠지고, 2단계부터는 예외 없이 막힘
@@ -78,13 +79,13 @@ e.start_session(30, 3)
 assert e.level == 3
 assert bp._read_list(W) == ["*"]
 allow = bp._read_list(W, bp.ALLOW)
-assert {"claude.ai", "claude.com", "anthropic.com", "lms.example.ac.kr"} == set(allow), allow
+assert {"claude.ai", "claude.com", "anthropic.com", "lms.example.ac.kr", "localhost", "127.0.0.1", "[::1]"} == set(allow), allow
 assert e.appguard.calls and "claude.exe" in e.appguard.calls[-1]
 assert restarts == ["Claude만 정책 적용"], restarts
 assert "허용 사이트 1곳" in " ".join(e.state()["rules_now"])
 
 e.start_session(30, 4)
-assert bp._read_list(W) == ["*"] and bp._read_list(W, bp.ALLOW) == []
+assert bp._read_list(W) == ["*"] and set(bp._read_list(W, bp.ALLOW)) == {"localhost", "127.0.0.1", "[::1]"}
 assert "claude.exe" not in e.appguard.calls[-1] and any("claude.exe" in k for k in killed)
 assert restarts[-1] == "오프라인 정책 적용"
 

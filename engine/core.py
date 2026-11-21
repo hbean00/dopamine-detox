@@ -281,7 +281,8 @@ class Engine:
         s = self.store.settings
         block = (all_policy_patterns(s["extra_domains"]) | levels.preset_domains() | {"*"}
                  | set(self.store.data.get("policy_applied") or []))
-        allow = (set(levels.CLAUDE_SITES) | {levels.normalize_domain(x) or "" for x in s.get("allowed_sites") or []}
+        allow = (set(levels.CLAUDE_SITES) | set(levels.LOCAL_SITES)
+                 | {levels.normalize_domain(x) or "" for x in s.get("allowed_sites") or []}
                  | set(self.store.data.get("policy_allow_applied") or [])) - {""}
         return block, allow
 

@@ -15,7 +15,7 @@
     { id: 1, name: '가벼운 집중', short: '딴짓 사이트만 차단', rules: [] },
     { id: 2, name: '깊은 집중', short: 'SNS·뉴스·쇼핑까지 차단', rules: [] },
     { id: 3, name: 'Claude만', short: 'Claude와 허용 사이트만', rules: [] },
-    { id: 4, name: '오프라인', short: '모든 웹·Claude 차단', rules: [] },
+    { id: 4, name: '오프라인', short: '외부 웹·Claude 차단', rules: [] },
   ];
 
   let api = null;

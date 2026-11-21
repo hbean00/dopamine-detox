@@ -9,6 +9,9 @@ import re
 from .targets import TARGETS, domains_for
 
 CLAUDE_SITES = ["claude.ai", "claude.com", "anthropic.com"]
+# 내 PC 안의 개발 서버 (Claude로 만든 앱 등) — 외부 인터넷이 아니므로 3·4단계 모두 허용 (사용자 요청 2026-11-21)
+# Chromium 정책 형식: 'localhost'는 모든 포트와 하위 이름(app.localhost)까지 포함
+LOCAL_SITES = ["localhost", "127.0.0.1", "[::1]"]
 
 # 2단계에서 추가로 막는 묶음 (도메인 → 브라우저 정책, 제목 패턴 → 실행 중인 브라우저 탭 닫기)
 PRESETS = {
@@ -80,9 +83,9 @@ LEVELS = {
     2: {"name": "깊은 집중", "short": "SNS·뉴스·쇼핑까지 막기",
         "rules": ["1단계 차단 전부", "SNS·뉴스·쇼핑·OTT·커뮤니티 차단", "메신저 종료", "예외(잠깐 열기) 없음"]},
     3: {"name": "Claude만", "short": "Claude와 허용 사이트·앱만",
-        "rules": ["웹은 Claude와 허용 사이트만", "허용 앱 밖의 창은 닫음", "예외 없음"]},
-    4: {"name": "오프라인", "short": "웹·Claude 모두 끄기",
-        "rules": ["모든 웹사이트 차단", "Claude 웹·앱 차단", "허용 앱 밖의 창은 닫음", "예외 없음"]},
+        "rules": ["웹은 Claude·localhost와 허용 사이트만", "허용 앱 밖의 창은 닫음", "예외 없음"]},
+    4: {"name": "오프라인", "short": "외부 웹·Claude 끄기",
+        "rules": ["외부 웹사이트 모두 차단 (localhost는 열림)", "Claude 웹·앱 차단", "허용 앱 밖의 창은 닫음", "예외 없음"]},
 }
 
 
@@ -189,11 +192,12 @@ def plan(level, settings):
     if level == 3:
         p["block"] = {"*"}
         sites, _ = validate_allowed_sites(settings.get("allowed_sites"), extra)
-        p["allow"] = set(CLAUDE_SITES) | set(sites)
+        p["allow"] = set(CLAUDE_SITES) | set(LOCAL_SITES) | set(sites)
         p["allowlist_apps"] = ESSENTIAL_APPS | set(normalize_apps(settings.get("allowed_apps"))) | set(CLAUDE_APPS)
         p["needs_restart"] = True
     if level == 4:
         p["block"] = {"*"}
+        p["allow"] = set(LOCAL_SITES)  # 외부 웹은 전부 막되 내 PC의 localhost는 열어 둠
         apps = set(normalize_apps(settings.get("allowed_apps"))) - set(CLAUDE_APPS)
         p["allowlist_apps"] = ESSENTIAL_APPS | apps
         p["kill"] |= set(CLAUDE_APPS)
@@ -207,7 +211,7 @@ def rules_now(level, settings):
     r = list(LEVELS[level]["rules"])
     if level == 3:
         sites, _ = validate_allowed_sites(settings.get("allowed_sites"), settings.get("extra_domains"))
-        r[0] = f"웹은 Claude와 허용 사이트 {len(sites)}곳만" if sites else "웹은 Claude만"
+        r[0] = f"웹은 Claude·localhost와 허용 사이트 {len(sites)}곳만" if sites else "웹은 Claude·localhost만"
     if level in (3, 4):
         n = len(normalize_apps(settings.get("allowed_apps")))
         r = [x if "허용 앱" not in x else f"허용 앱 {n}개 밖의 창은 닫음" for x in r]

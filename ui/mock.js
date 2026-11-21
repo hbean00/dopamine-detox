@@ -13,9 +13,9 @@
     { id: 2, name: '깊은 집중', short: 'SNS·뉴스·쇼핑까지 차단',
       rules: ['1단계 차단 전부', 'SNS·뉴스·쇼핑·OTT·커뮤니티 차단', '카카오톡·디스코드 등 메신저 종료', '잠깐 열기 없음'] },
     { id: 3, name: 'Claude만', short: 'Claude와 허용 사이트만',
-      rules: ['Claude와 허용 사이트만 열림', '허용 앱 밖의 창은 닫음', '잠깐 열기 없음'] },
-    { id: 4, name: '오프라인', short: '모든 웹·Claude 차단',
-      rules: ['모든 웹사이트 차단', 'Claude 웹·앱 차단', '허용 앱 밖의 창은 닫음'] },
+      rules: ['Claude·localhost와 허용 사이트만 열림', '허용 앱 밖의 창은 닫음', '잠깐 열기 없음'] },
+    { id: 4, name: '오프라인', short: '외부 웹·Claude 차단',
+      rules: ['외부 웹사이트 모두 차단 (localhost는 열림)', 'Claude 웹·앱 차단', '허용 앱 밖의 창은 닫음'] },
   ];
   // 1·2단계에서 막는 주소 — 허용 사이트에 넣을 수 없다
   const BLOCKED_12 = ['instagram.com', 'youtube.com', 'youtu.be', 'comic.naver.com', 'webtoons.com', 'facebook.com', 'x.com', 'twitter.com',
